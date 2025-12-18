@@ -19,19 +19,22 @@ type Todo struct {
 
 type Note struct {
 	ID      int
+	Title   string
 	Content string
 }
 
 func InitDB() (*sql.DB, error) {
 	home, _ := os.UserHomeDir()
+	// Using XDG standard path for Linux
 	dbPath := filepath.Join(home, ".local", "share", "mynotes")
-	os.MkdirAll(dbPath, 0755)
+	_ = os.MkdirAll(dbPath, 0755)
 
 	db, err := sql.Open("sqlite3", filepath.Join(dbPath, "data.db"))
 	if err != nil {
 		return nil, err
 	}
 
+	// Schema: Notes now have a Title and a Body (Content)
 	query := `
 	CREATE TABLE IF NOT EXISTS todos (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -42,6 +45,7 @@ func InitDB() (*sql.DB, error) {
 	);
 	CREATE TABLE IF NOT EXISTS notes (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		title TEXT,
 		content TEXT,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
@@ -58,6 +62,7 @@ func AddTodo(db *sql.DB, task string, due time.Time) error {
 }
 
 func GetTodos(db *sql.DB) ([]Todo, error) {
+	// We fetch all; the UI logic in model.go handles the Pending/Completed split
 	rows, err := db.Query("SELECT id, task, is_done, due_at FROM todos ORDER BY is_done ASC, due_at ASC")
 	if err != nil {
 		return nil, err
@@ -74,11 +79,51 @@ func GetTodos(db *sql.DB) ([]Todo, error) {
 }
 
 func ToggleTodo(db *sql.DB, id int, currentStatus bool) error {
-	_, err := db.Exec("UPDATE todos SET is_done = ? WHERE id = ?", !currentStatus, id)
+	newStatus := 1
+	if currentStatus {
+		newStatus = 0
+	}
+	_, err := db.Exec("UPDATE todos SET is_done = ? WHERE id = ?", newStatus, id)
 	return err
 }
 
+func DeleteTodo(db *sql.DB, id int) error {
+	_, err := db.Exec("DELETE FROM todos WHERE id = ?", id)
+	return err
+}
+
+// --- Note Operations ---
+
+func AddNote(db *sql.DB, title string, content string) error {
+	_, err := db.Exec("INSERT INTO notes (title, content) VALUES (?, ?)", title, content)
+	return err
+}
+
+func GetNotes(db *sql.DB) ([]Note, error) {
+	rows, err := db.Query("SELECT id, title, content FROM notes ORDER BY id DESC")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var notes []Note
+	for rows.Next() {
+		var n Note
+		rows.Scan(&n.ID, &n.Title, &n.Content)
+		notes = append(notes, n)
+	}
+	return notes, nil
+}
+
+func DeleteNote(db *sql.DB, id int) error {
+	_, err := db.Exec("DELETE FROM notes WHERE id = ?", id)
+	return err
+}
+
+// --- Daemon / Notification Operations ---
+
 func GetPendingAlerts(db *sql.DB) ([]Todo, error) {
+	// Finds tasks that are due now or in the past, haven't been alerted, and aren't done
 	rows, err := db.Query("SELECT id, task FROM todos WHERE due_at <= ? AND alert_sent = 0 AND is_done = 0", time.Now())
 	if err != nil {
 		return nil, err
@@ -97,27 +142,4 @@ func GetPendingAlerts(db *sql.DB) ([]Todo, error) {
 func MarkAlerted(db *sql.DB, id int) error {
 	_, err := db.Exec("UPDATE todos SET alert_sent = 1 WHERE id = ?", id)
 	return err
-}
-
-// --- Note Operations ---
-
-func AddNote(db *sql.DB, content string) error {
-	_, err := db.Exec("INSERT INTO notes (content) VALUES (?)", content)
-	return err
-}
-
-func GetNotes(db *sql.DB) ([]Note, error) {
-	rows, err := db.Query("SELECT id, content FROM notes ORDER BY id DESC")
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var notes []Note
-	for rows.Next() {
-		var n Note
-		rows.Scan(&n.ID, &n.Content)
-		notes = append(notes, n)
-	}
-	return notes, nil
 }
