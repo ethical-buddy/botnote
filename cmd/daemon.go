@@ -20,21 +20,15 @@ var daemonCmd = &cobra.Command{
 		defer db.Close()
 
 		ticker := time.NewTicker(1 * time.Minute)
-		log.Println("Daemon started...")
-
 		for range ticker.C {
 			tasks, err := storage.GetPendingAlerts(db)
 			if err != nil {
-				log.Println("Error checking tasks:", err)
 				continue
 			}
 
 			for _, t := range tasks {
-				// Send notification using system notify-send
 				exec.Command("notify-send", "-u", "critical", "Task Due!", t.Task).Run()
-				
 				storage.MarkAlerted(db, t.ID)
-				log.Printf("Alerted for task: %s\n", t.Task)
 			}
 		}
 	},

@@ -25,7 +25,6 @@ type Note struct {
 
 func InitDB() (*sql.DB, error) {
 	home, _ := os.UserHomeDir()
-	// Using XDG standard path for Linux
 	dbPath := filepath.Join(home, ".local", "share", "mynotes")
 	_ = os.MkdirAll(dbPath, 0755)
 
@@ -34,7 +33,6 @@ func InitDB() (*sql.DB, error) {
 		return nil, err
 	}
 
-	// Schema: Notes now have a Title and a Body (Content)
 	query := `
 	CREATE TABLE IF NOT EXISTS todos (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -48,13 +46,10 @@ func InitDB() (*sql.DB, error) {
 		title TEXT,
 		content TEXT,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-	);
-	`
+	);`
 	_, err = db.Exec(query)
 	return db, err
 }
-
-// --- Todo Operations ---
 
 func AddTodo(db *sql.DB, task string, due time.Time) error {
 	_, err := db.Exec("INSERT INTO todos (task, due_at) VALUES (?, ?)", task, due)
@@ -62,7 +57,6 @@ func AddTodo(db *sql.DB, task string, due time.Time) error {
 }
 
 func GetTodos(db *sql.DB) ([]Todo, error) {
-	// We fetch all; the UI logic in model.go handles the Pending/Completed split
 	rows, err := db.Query("SELECT id, task, is_done, due_at FROM todos ORDER BY is_done ASC, due_at ASC")
 	if err != nil {
 		return nil, err
@@ -79,11 +73,9 @@ func GetTodos(db *sql.DB) ([]Todo, error) {
 }
 
 func ToggleTodo(db *sql.DB, id int, currentStatus bool) error {
-	newStatus := 1
-	if currentStatus {
-		newStatus = 0
-	}
-	_, err := db.Exec("UPDATE todos SET is_done = ? WHERE id = ?", newStatus, id)
+	newVal := 0
+	if !currentStatus { newVal = 1 }
+	_, err := db.Exec("UPDATE todos SET is_done = ? WHERE id = ?", newVal, id)
 	return err
 }
 
@@ -92,10 +84,13 @@ func DeleteTodo(db *sql.DB, id int) error {
 	return err
 }
 
-// --- Note Operations ---
-
 func AddNote(db *sql.DB, title string, content string) error {
 	_, err := db.Exec("INSERT INTO notes (title, content) VALUES (?, ?)", title, content)
+	return err
+}
+
+func UpdateNoteContent(db *sql.DB, id int, content string) error {
+	_, err := db.Exec("UPDATE notes SET content = ? WHERE id = ?", content, id)
 	return err
 }
 
@@ -120,10 +115,7 @@ func DeleteNote(db *sql.DB, id int) error {
 	return err
 }
 
-// --- Daemon / Notification Operations ---
-
 func GetPendingAlerts(db *sql.DB) ([]Todo, error) {
-	// Finds tasks that are due now or in the past, haven't been alerted, and aren't done
 	rows, err := db.Query("SELECT id, task FROM todos WHERE due_at <= ? AND alert_sent = 0 AND is_done = 0", time.Now())
 	if err != nil {
 		return nil, err

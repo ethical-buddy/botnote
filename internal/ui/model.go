@@ -13,13 +13,13 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// --- Styles ---
 var (
 	appStyle     = lipgloss.NewStyle().Margin(1, 2)
-	pendingStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("211")).Bold(true) // Pinkish/Red for pending
+	headerStyle  = lipgloss.NewStyle().Background(lipgloss.Color("62")).Foreground(lipgloss.Color("230")).Padding(0, 1).Bold(true)
+	pendingStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("211")).Bold(true)
 	doneStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Strikethrough(true)
-	headerStyle  = lipgloss.NewStyle().Background(lipgloss.Color("62")).Foreground(lipgloss.Color("230")).Padding(0, 1)
-	boxStyle     = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("62")).Padding(1).Width(45).Height(15)
+	boxStyle     = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("62")).Padding(1).Width(45).Height(20)
+	focusedBox   = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("205")).Padding(1).Width(45).Height(20)
 	selStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Bold(true)
 )
 
@@ -31,34 +31,25 @@ const (
 	focusInput
 )
 
-// Msg sent when returning from Vim
 type vimFinishedMsg struct {
 	content string
+	noteID  int
 	err     error
 }
 
 type Model struct {
-	db         *sql.DB
-	todos      []storage.Todo
-	notes      []storage.Note
-	cursor     int
-	focus      focus
-	input      textinput.Model
-	inputMode  string // "todo" or "note_title"
-	tempTitle  string // Stores note title while vim is open
-	terminalW  int
-	terminalH  int
+	db        *sql.DB
+	todos     []storage.Todo
+	notes     []storage.Note
+	cursor    int
+	focus     focus
+	input     textinput.Model
+	inputMode string
 }
 
 func NewModel(db *sql.DB) Model {
 	ti := textinput.New()
-	ti.Focus()
-
-	m := Model{
-		db:    db,
-		focus: focusTodos,
-		input: ti,
-	}
+	m := Model{db: db, focus: focusTodos, input: ti}
 	m.refreshData()
 	return m
 }
@@ -68,20 +59,13 @@ func (m *Model) refreshData() {
 	m.notes, _ = storage.GetNotes(m.db)
 }
 
-func (m Model) Init() tea.Cmd {
-	return nil
-}
+func (m Model) Init() tea.Cmd { return nil }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 
 	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		m.terminalW = msg.Width
-		m.terminalH = msg.Height
-
 	case tea.KeyMsg:
-		// Global keys
 		if m.focus != focusInput {
 			switch msg.String() {
 			case "q", "ctrl+c":
@@ -105,138 +89,120 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					storage.ToggleTodo(m.db, t.ID, t.IsDone)
 					m.refreshData()
 				}
-			case "x": // DELETE
+			case "v":
+				if m.focus == focusNotes && len(m.notes) > 0 {
+					return m, m.openVimAction(m.notes[m.cursor])
+				}
+			case "x":
 				if m.focus == focusTodos && len(m.todos) > 0 {
 					storage.DeleteTodo(m.db, m.todos[m.cursor].ID)
 				} else if m.focus == focusNotes && len(m.notes) > 0 {
 					storage.DeleteNote(m.db, m.notes[m.cursor].ID)
 				}
 				m.refreshData()
+				if m.cursor > 0 { m.cursor-- }
 			case "t":
 				m.focus = focusInput
 				m.inputMode = "todo"
-				m.input.Placeholder = "Task description..."
+				m.input.Placeholder = "Task..."
+				m.input.SetValue("")
 				m.input.Focus()
 				return m, textinput.Blink
 			case "n":
 				m.focus = focusInput
-				m.inputMode = "note_title"
-				m.input.Placeholder = "Note title..."
+				m.inputMode = "note"
+				m.input.Placeholder = "Note Title..."
+				m.input.SetValue("")
 				m.input.Focus()
 				return m, textinput.Blink
 			}
 		} else {
-			// Input mode keys
 			switch msg.String() {
 			case "esc":
 				m.focus = focusTodos
-				m.input.Blur()
 			case "enter":
 				val := m.input.Value()
 				if val == "" { return m, nil }
-				
 				if m.inputMode == "todo" {
 					storage.AddTodo(m.db, val, time.Now().Add(1*time.Hour))
 					m.refreshData()
 					m.focus = focusTodos
-					m.input.SetValue("")
-				} else if m.inputMode == "note_title" {
-					m.tempTitle = val
-					m.input.SetValue("")
-					// TRIGGER VIM
-					return m, m.openVimAction()
+					return m, nil
+				} else {
+					// 1. Save Title immediately so it appears in the list
+					storage.AddNote(m.db, val, "") 
+					m.refreshData()
+					// 2. Open Vim for the newly created note (which will be at index 0)
+					newNote := m.notes[0]
+					m.focus = focusNotes
+					return m, m.openVimAction(newNote)
 				}
 			}
 		}
 
 	case vimFinishedMsg:
-		if msg.err == nil && msg.content != "" {
-			storage.AddNote(m.db, m.tempTitle, msg.content)
-			m.refreshData()
+		if msg.err == nil {
+			storage.UpdateNoteContent(m.db, msg.noteID, msg.content)
 		}
-		m.focus = focusNotes
+		m.refreshData()
+		return m, nil
 	}
 
 	if m.focus == focusInput {
 		m.input, cmd = m.input.Update(msg)
+		return m, cmd
 	}
 
-	return m, cmd
+	return m, nil
 }
 
-// Action to open Vim
-func (m Model) openVimAction() tea.Cmd {
+func (m Model) openVimAction(n storage.Note) tea.Cmd {
 	editor := os.Getenv("EDITOR")
 	if editor == "" { editor = "vim" }
 
-	// Create temp file
-	f, _ := os.CreateTemp("", "note-*.md")
+	f, _ := os.CreateTemp("", "mynote-*.md")
+	f.Write([]byte(n.Content))
 	f.Close()
 
 	c := exec.Command(editor, f.Name())
 	return tea.ExecProcess(c, func(err error) tea.Msg {
 		content, _ := os.ReadFile(f.Name())
 		os.Remove(f.Name())
-		return vimFinishedMsg{content: string(content), err: err}
+		return vimFinishedMsg{content: string(content), noteID: n.ID, err: err}
 	})
 }
 
 func (m Model) View() string {
 	if m.focus == focusInput {
-		return appStyle.Render(fmt.Sprintf(
-			"Creating %s\n\n%s\n\n[Enter] Confirm  [Esc] Cancel",
-			m.inputMode,
-			m.input.View(),
-		))
+		return appStyle.Render(fmt.Sprintf("%s\n\n%s\n\n[Enter] Confirm  [Esc] Cancel", headerStyle.Render(" NEW "+m.inputMode), m.input.View()))
 	}
 
-	// --- TODO SECTION ---
-	todoContent := headerStyle.Render("TODOS") + "\n\n"
-	
-	// Pending
-	todoContent += pendingStyle.Render("󱎫 PENDING") + "\n"
+	tView := headerStyle.Render(" TODOS ") + "\n\n" + pendingStyle.Render(" PENDING") + "\n"
 	for i, t := range m.todos {
 		if t.IsDone { continue }
-		cursor := "  "
-		line := fmt.Sprintf("[ ] %s", t.Task)
-		if m.focus == focusTodos && m.cursor == i {
-			cursor = selStyle.Render("> ")
-			line = selStyle.Render(line)
-		}
-		todoContent += cursor + line + "\n"
+		p, l := "  ", "[ ] "+t.Task
+		if m.focus == focusTodos && m.cursor == i { p, l = selStyle.Render("> "), selStyle.Render(l) }
+		tView += p + l + "\n"
 	}
-
-	// Completed
-	todoContent += "\n" + doneStyle.Render("󰄬 COMPLETED") + "\n"
+	tView += "\n" + doneStyle.Render(" COMPLETED") + "\n"
 	for i, t := range m.todos {
 		if !t.IsDone { continue }
-		cursor := "  "
-		line := doneStyle.Render(fmt.Sprintf("[x] %s", t.Task))
-		if m.focus == focusTodos && m.cursor == i {
-			cursor = selStyle.Render("> ")
-		}
-		todoContent += cursor + line + "\n"
+		p, l := "  ", doneStyle.Render("[x] "+t.Task)
+		if m.focus == focusTodos && m.cursor == i { p = selStyle.Render("> ") }
+		tView += p + l + "\n"
 	}
 
-	// --- NOTES SECTION ---
-	notesContent := headerStyle.Render("NOTES") + "\n\n"
+	nView := headerStyle.Render(" NOTES ") + "\n\n"
 	for i, n := range m.notes {
-		cursor := "  "
-		title := n.Title
-		if m.focus == focusNotes && m.cursor == i {
-			cursor = selStyle.Render("> ")
-			title = selStyle.Render(title)
-		}
-		notesContent += fmt.Sprintf("%s%s\n", cursor, title)
+		p, t := "  ", n.Title
+		if m.focus == focusNotes && m.cursor == i { p, t = selStyle.Render("> "), selStyle.Render(t) }
+		nView += p + t + "\n"
 	}
 
-	// Layout
-	mainView := lipgloss.JoinHorizontal(
-		lipgloss.Top,
-		boxStyle.Render(todoContent),
-		boxStyle.Render(notesContent),
-	)
+	tBox, nBox := boxStyle, boxStyle
+	if m.focus == focusTodos { tBox = focusedBox }
+	if m.focus == focusNotes { nBox = focusedBox }
 
-	help := "\n[t] New Task  [n] New Note (Vim)  [x] Delete  [Tab] Switch  [Enter] Toggle  [q] Quit"
-	return appStyle.Render(mainView + help)
+	return appStyle.Render(lipgloss.JoinHorizontal(lipgloss.Top, tBox.Render(tView), nBox.Render(nView)) +
+		"\n [Tab] Switch  [n] Note  [t] Task  [v] View/Edit  [x] Delete")
 }

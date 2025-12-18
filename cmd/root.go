@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"fmt"
 	"log"
 	"mynotes/internal/storage"
 	"mynotes/internal/ui"
@@ -13,7 +12,7 @@ import (
 
 var rootCmd = &cobra.Command{
 	Use:   "mynotes",
-	Short: "A CLI Todo and Notes Manager",
+	Short: "Notes and Todo CLI",
 	Run: func(cmd *cobra.Command, args []string) {
 		db, err := storage.InitDB()
 		if err != nil {
@@ -23,15 +22,13 @@ var rootCmd = &cobra.Command{
 
 		p := tea.NewProgram(ui.NewModel(db), tea.WithAltScreen())
 		if _, err := p.Run(); err != nil {
-			fmt.Printf("Alas, there's been an error: %v", err)
-			os.Exit(1)
+			log.Fatal(err)
 		}
 	},
 }
 
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
-		fmt.Println(err)
 		os.Exit(1)
 	}
 }
