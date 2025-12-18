@@ -9,6 +9,8 @@ A lightweight, terminal-based productivity tool for Hyprland users. Manage your 
 - **Background Daemon:** Sends desktop notifications via `notify-send` when tasks are due.
 
 ## ⌨️ Controls
+USAGE = type - bot
+
 | Key | Action |
 | :--- | :--- |
 | `Tab` | Switch between Todo and Note panes |
